@@ -1,1 +1,13 @@
-scratch test file
+scratch test file with to-dos ˗ˏˋ ★ ˎˊ˗
+
+unit tests for API and trform once the AWS outage is fixed lol ツ
+
+----
+
+API endpoints
+
+POST /hosts: Create a new host.
+GET /hosts: Get a list of all hosts.
+GET /hosts/{id}: Get a single host by its ID.
+PUT /hosts/{id}: Update an existing host.
+DELETE /hosts/{id}: Delete a host.
