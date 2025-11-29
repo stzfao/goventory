@@ -18,7 +18,7 @@ import (
 type goventoryHost struct {
 	ID        string `json:"id"`
 	Hostname  string `json:"hostname"`
-	IPAddress string `json:"ip_address"`
+	IPAddress string `json:"ip_address,omitempty"`
 	HostGroup string `json:"host_group"`
 }
 
@@ -65,6 +65,7 @@ func (r *hostResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"ip_address": schema.StringAttribute{
 				Description: "Host's IP address.",
 				Optional:    true,
+				Computed:    true,
 			},
 			"host_group": schema.StringAttribute{
 				Description: "Group the host belongs to.",
@@ -84,7 +85,7 @@ func (r *hostResource) Configure(_ context.Context, req resource.ConfigureReques
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected map[string]interface{}, got: %%T. Please report this issue to the devs.", req.ProviderData),
+			fmt.Sprintf("Expected map[string]interface{}, got: %T. Please report this issue to the devs.", req.ProviderData),
 		)
 		return
 	}
@@ -104,8 +105,11 @@ func (r *hostResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	host := goventoryHost{
 		Hostname:  plan.Hostname.ValueString(),
-		IPAddress: plan.IPAddress.ValueString(),
 		HostGroup: plan.HostGroup.ValueString(),
+	}
+
+	if !plan.IPAddress.IsNull() {
+		host.IPAddress = plan.IPAddress.ValueString()
 	}
 
 	body, err := json.Marshal(host)
@@ -114,7 +118,7 @@ func (r *hostResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/api/v1/host", r.serverURL), bytes.NewBuffer(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/api/v1/hosts", r.serverURL), bytes.NewBuffer(body))
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create HTTP request", err.Error())
 		return
@@ -142,7 +146,11 @@ func (r *hostResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	plan.ID = types.StringValue(createdHost.ID)
 	plan.Hostname = types.StringValue(createdHost.Hostname)
-	plan.IPAddress = types.StringValue(createdHost.IPAddress)
+	if plan.IPAddress.IsNull() && createdHost.IPAddress == "" {
+		plan.IPAddress = types.StringNull()
+	} else {
+		plan.IPAddress = types.StringValue(createdHost.IPAddress)
+	}
 	plan.HostGroup = types.StringValue(createdHost.HostGroup)
 
 	diags = resp.State.Set(ctx, plan)
@@ -158,7 +166,7 @@ func (r *hostResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/v1/host/%s", r.serverURL, state.Hostname.ValueString()), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/v1/hosts/%s", r.serverURL, state.Hostname.ValueString()), nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create HTTP request", err.Error())
 		return
@@ -190,7 +198,11 @@ func (r *hostResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	state.ID = types.StringValue(host.ID)
 	state.Hostname = types.StringValue(host.Hostname)
-	state.IPAddress = types.StringValue(host.IPAddress)
+	if state.IPAddress.IsNull() && host.IPAddress == "" {
+		state.IPAddress = types.StringNull()
+	} else {
+		state.IPAddress = types.StringValue(host.IPAddress)
+	}
 	state.HostGroup = types.StringValue(host.HostGroup)
 
 	diags = resp.State.Set(ctx, &state)
@@ -206,9 +218,13 @@ func (r *hostResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	host := goventoryHost{
-		IPAddress: plan.IPAddress.ValueString(),
-		HostGroup: plan.HostGroup.ValueString(),
+	host := goventoryHost{}
+
+	if !plan.IPAddress.IsNull() {
+		host.IPAddress = plan.IPAddress.ValueString()
+	}
+	if !plan.HostGroup.IsNull() {
+		host.HostGroup = plan.HostGroup.ValueString()
 	}
 
 	body, err := json.Marshal(host)
@@ -217,7 +233,7 @@ func (r *hostResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/api/v1/host/%s", r.serverURL, plan.Hostname.ValueString()), bytes.NewBuffer(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/api/v1/hosts/%s", r.serverURL, plan.Hostname.ValueString()), bytes.NewBuffer(body))
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create HTTP request", err.Error())
 		return
@@ -245,7 +261,11 @@ func (r *hostResource) Update(ctx context.Context, req resource.UpdateRequest, r
 
 	plan.ID = types.StringValue(updatedHost.ID)
 	plan.Hostname = types.StringValue(updatedHost.Hostname)
-	plan.IPAddress = types.StringValue(updatedHost.IPAddress)
+	if plan.IPAddress.IsNull() && updatedHost.IPAddress == "" {
+		plan.IPAddress = types.StringNull()
+	} else {
+		plan.IPAddress = types.StringValue(updatedHost.IPAddress)
+	}
 	plan.HostGroup = types.StringValue(updatedHost.HostGroup)
 
 	diags = resp.State.Set(ctx, plan)
@@ -261,7 +281,7 @@ func (r *hostResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/api/v1/host/%s", r.serverURL, state.Hostname.ValueString()), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/api/v1/hosts/%s", r.serverURL, state.Hostname.ValueString()), nil)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create HTTP request", err.Error())
 		return

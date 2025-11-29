@@ -11,3 +11,164 @@ GET /hosts: Get a list of all hosts.
 GET /hosts/{id}: Get a single host by its ID.
 PUT /hosts/{id}: Update an existing host.
 DELETE /hosts/{id}: Delete a host.
+
+Project Brief: GoVentory (API & Terraform Provider)
+You are my coding assistant. Help me build a project called "GoVentory." The goal is to create an API-driven Ansible inventory manager (written in Go) and a corresponding Terraform provider to automate the "Day 0 / Day 1" infrastructure handoff.
+
+The project has two main parts:
+
+goventory-api: A Go-based REST API that manages a simple inventory.
+
+terraform-provider-goventory: A custom Terraform provider (in Go) that performs CRUD operations against the API.
+
+Part 1: goventory-api
+Goal: Create a lightweight Go API server to manage a collection of inventory hosts.
+
+Technology:
+
+Language: Go
+
+API Framework: Gin (for fast routing) or standard net/http
+
+Database: SQLite (to keep it simple)
+
+Database Schema:
+
+Create a single table: hosts
+
+Columns:
+
+id (INTEGER, PRIMARY KEY, AUTOINCREMENT)
+
+hostname (TEXT, NOT NULL, UNIQUE)
+
+ip_address (TEXT)
+
+host_group (TEXT, NOT NULL)
+
+API Endpoint Specifications:
+
+Create Host
+
+Method: POST
+
+Path: /api/v1/host
+
+Request Body (JSON):
+
+Response (JSON): The newly created host object.
+
+Read Host
+
+Method: GET
+
+Path: /api/v1/host/:hostname
+
+Response (JSON):
+
+Update Host
+
+Method: PUT
+
+Path: /api/v1/host/:hostname
+
+Request Body (JSON):
+
+Response (JSON): The updated host object.
+
+Delete Host
+
+Method: DELETE
+
+Path: /api/v1/host/:hostname
+
+Response: 204 No Content
+
+Get Ansible Inventory (Special Endpoint)
+
+Method: GET
+
+Path: /inventory
+
+Response (Plain Text): Must be in Ansible INI format. The API should query the DB and group all hosts.
+
+Example Output:
+
+Part 2: terraform-provider-goventory
+Goal: Create a custom Terraform provider to manage the goventory-api as infrastructure-as-code.
+
+Technology:
+
+Language: Go
+
+Framework: Terraform Plugin Framework (hashicorp/terraform-plugin-framework)
+
+Provider Configuration:
+
+The provider must be configurable with the API server's address.
+
+Attribute: server_url (string, required)
+
+Resource Definition: goventory_host
+
+Resource Name: goventory_host
+
+Schema (Attributes):
+
+id (string, computed)
+
+hostname (string, required, plan_modifier: UseStateForUnknown)
+
+ip_address (string, optional)
+
+host_group (string, required)
+
+Resource Function Mapping:
+
+Create:
+
+Action: When a user runs terraform apply on a new goventory_host resource.
+
+Logic: Send a POST request to the /api/v1/host endpoint with the resource's hostname, ip_address, and host_group.
+
+State: Save the returned host details (especially the id) to the Terraform state.
+
+Read:
+
+Action: During a terraform plan or refresh.
+
+Logic: Send a GET request to /api/v1/host/:hostname (using the hostname from state).
+
+State: Update the state with the latest information from the API. If the host is not found (404), inform Terraform that the resource has been deleted externally.
+
+Update:
+
+Action: When a user changes ip_address or host_group and runs terraform apply.
+
+Logic: Send a PUT request to /api/v1/host/:hostname with the new data.
+
+State: Update the state with the returned (updated) host object.
+
+Delete:
+
+Action: When a user runs terraform destroy.
+
+Logic: Send a DELETE request to /api/v1/host/:hostname.
+
+State: Remove the resource from the Terraform state.
+
+Bonus Tasks
+Containerize: Create a Dockerfile for the goventory-api.
+
+Deploy: Write a simple deployment.yaml and service.yaml to deploy the API to a Kubernetes cluster (like Minikube).
+
+Documentation: Create a README.md for both repositories explaining the project and how to use it.
+
+----
+
+Done: 2025-10-27
+
+- Added /api/v1 prefix to the goventory-api.
+- Added unit tests to the goventory-api.
+- Corrected the API calls in the terraform-provider-goventory.
+- Updated the acceptance tests for the terraform-provider-goventory.

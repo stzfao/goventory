@@ -6,136 +6,137 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/assert"
 	"github.com/stzfao/goventory/goventory-api/internal/database"
+	"github.com/stretchr/testify/assert"
 )
 
-func setupRouter() (*gin.Engine, *sql.DB) {
-	db, err := database.NewDB(":memory:")
+var testDB *sql.DB
+
+func TestMain(m *testing.M) {
+	gin.SetMode(gin.TestMode)
+
+	// Setup a temporary database for testing
+	var err error
+	testDB, err = database.NewDB(":memory:")
 	if err != nil {
-		panic(err)
+		panic("Failed to create in-memory database: " + err.Error())
 	}
 
-	server := &Server{db: db}
+	// Run tests
+	exitCode := m.Run()
 
-	gin.SetMode(gin.TestMode)
-	r := gin.Default()
+	// Teardown
+	testDB.Close()
 
-	r.POST("/hosts", server.createHostHandler)
-	r.GET("/hosts", server.listHostsHandler)
-	r.GET("/hosts/:hostname", server.getHostHandler)
-	r.PUT("/hosts/:hostname", server.updateHostHandler)
-	r.DELETE("/hosts/:hostname", server.deleteHostHandler)
-
-	return r, db
+	os.Exit(exitCode)
 }
 
-func TestCreateHostHandler(t *testing.T) {
-	r, db := setupRouter()
-	defer db.Close()
+func setupRouter() *gin.Engine {
+	server := &Server{db: testDB}
+	r := gin.Default()
+	r.GET("/ping", func(c *gin.Context) {
+		c.JSON(200, gin.H{"message": "pong (•̀ᴗ•́ )و"})
+	})
 
+	apiV1 := r.Group("/api/v1")
+	{
+		apiV1.POST("/hosts", server.createHostHandler)
+		apiV1.GET("/hosts", server.listHostsHandler)
+		apiV1.GET("/hosts/:hostname", server.getHostHandler)
+		apiV1.DELETE("/hosts/:hostname", server.deleteHostHandler)
+		apiV1.PUT("/hosts/:hostname", server.updateHostHandler)
+	}
+
+	r.GET("/inventory", server.getInventoryHandler)
+
+	return r
+}
+
+func TestPingRoute(t *testing.T) {
+	router := setupRouter()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/ping", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "{\"message\":\"pong (•̀ᴗ•́ )و\"}", w.Body.String())
+}
+
+func TestHostHandlers(t *testing.T) {
+	// Clean up the database before each test
+	_, err := testDB.Exec("DELETE FROM hosts")
+	assert.NoError(t, err)
+
+	router := setupRouter()
+
+	// Create a host
 	host := database.Host{
 		Hostname:  "test-host",
-		IPAddress: "1.1.1.1",
+		IPAddress: "192.168.1.1",
 		HostGroup: "test-group",
 	}
-	body, _ := json.Marshal(host)
-
-	req, _ := http.NewRequest(http.MethodPost, "/hosts", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-
+	jsonValue, _ := json.Marshal(host)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
+	req, _ := http.NewRequest("POST", "/api/v1/hosts", bytes.NewBuffer(jsonValue))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusCreated, w.Code)
 
-	var createdHost database.Host
-	json.Unmarshal(w.Body.Bytes(), &createdHost)
-
-	assert.NotEmpty(t, createdHost.ID)
-	assert.Equal(t, host.Hostname, createdHost.Hostname)
-}
-
-func TestGetHostHandler(t *testing.T) {
-	r, db := setupRouter()
-	defer db.Close()
-
-	host, _ := database.CreateHost(db, &database.Host{Hostname: "test-host", IPAddress: "1.1.1.1", HostGroup: "test-group"})
-
-	req, _ := http.NewRequest(http.MethodGet, "/hosts/"+host.Hostname, nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
+	// Get the created host
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/api/v1/hosts/test-host", nil)
+	router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
-
 	var fetchedHost database.Host
 	json.Unmarshal(w.Body.Bytes(), &fetchedHost)
-
-	assert.Equal(t, host.ID, fetchedHost.ID)
 	assert.Equal(t, host.Hostname, fetchedHost.Hostname)
-}
 
-func TestListHostsHandler(t *testing.T) {
-	r, db := setupRouter()
-	defer db.Close()
-
-	database.CreateHost(db, &database.Host{Hostname: "test-host-1", IPAddress: "1.1.1.1", HostGroup: "test-group"})
-	database.CreateHost(db, &database.Host{Hostname: "test-host-2", IPAddress: "2.2.2.2", HostGroup: "test-group"})
-
-	req, _ := http.NewRequest(http.MethodGet, "/hosts", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
+	// List hosts
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/api/v1/hosts", nil)
+	router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
-
-	var hosts []database.Host
+	hosts := []database.Host{}
 	json.Unmarshal(w.Body.Bytes(), &hosts)
+	assert.Len(t, hosts, 1)
+	assert.Equal(t, host.Hostname, hosts[0].Hostname)
 
-	assert.Len(t, hosts, 2)
-}
-
-func TestUpdateHostHandler(t *testing.T) {
-	r, db := setupRouter()
-	defer db.Close()
-
-	host, _ := database.CreateHost(db, &database.Host{Hostname: "test-host", IPAddress: "1.1.1.1", HostGroup: "test-group"})
-
-	updateData := map[string]string{
-		"ip_address": "1.2.3.4",
-		"host_group": "new-group",
+	// Update the host
+	updatedHost := database.Host{
+		IPAddress: "192.168.1.2",
+		HostGroup: "new-group",
 	}
-	body, _ := json.Marshal(updateData)
-
-	req, _ := http.NewRequest(http.MethodPut, "/hosts/"+host.Hostname, bytes.NewBuffer(body))
+	jsonValue, _ = json.Marshal(updatedHost)
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("PUT", "/api/v1/hosts/test-host", bytes.NewBuffer(jsonValue))
 	req.Header.Set("Content-Type", "application/json")
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
+	router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var updatedHost database.Host
-	json.Unmarshal(w.Body.Bytes(), &updatedHost)
+	// Get the updated host
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/api/v1/hosts/test-host", nil)
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	var fetchedUpdatedHost database.Host
+	json.Unmarshal(w.Body.Bytes(), &fetchedUpdatedHost)
+	assert.Equal(t, updatedHost.IPAddress, fetchedUpdatedHost.IPAddress)
+	assert.Equal(t, updatedHost.HostGroup, fetchedUpdatedHost.HostGroup)
 
-	assert.Equal(t, "1.2.3.4", updatedHost.IPAddress)
-	assert.Equal(t, "new-group", updatedHost.HostGroup)
-}
-
-func TestDeleteHostHandler(t *testing.T) {
-	r, db := setupRouter()
-	defer db.Close()
-
-	host, _ := database.CreateHost(db, &database.Host{Hostname: "test-host", IPAddress: "1.1.1.1", HostGroup: "test-group"})
-
-	req, _ := http.NewRequest(http.MethodDelete, "/hosts/"+host.Hostname, nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
+	// Delete the host
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("DELETE", "/api/v1/hosts/test-host", nil)
+	router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNoContent, w.Code)
 
-	_, err := database.GetHostByHostname(db, host.Hostname)
-	assert.Equal(t, sql.ErrNoRows, err)
+	// Verify the host is deleted
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/api/v1/hosts/test-host", nil)
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }

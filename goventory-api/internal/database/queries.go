@@ -55,9 +55,9 @@ func ListHosts(db *sql.DB) ([]Host, error) {
 	return hosts, nil
 }
 
-// GetHostByID retrieves a single host by its ID.
-func GetHostByID(db *sql.DB, id string) (*Host, error) { // Changed id to string
-	row := db.QueryRow("SELECT id, hostname, ip_address, host_group FROM hosts WHERE id = ?", id)
+// retrieve a single host by its hostname.
+func GetHostByHostname(db *sql.DB, hostname string) (*Host, error) {
+	row := db.QueryRow("SELECT id, hostname, ip_address, host_group FROM hosts WHERE hostname = ?", hostname)
 
 	var host Host
 	err := row.Scan(&host.ID, &host.Hostname, &host.IPAddress, &host.HostGroup)
@@ -68,9 +68,9 @@ func GetHostByID(db *sql.DB, id string) (*Host, error) { // Changed id to string
 	return &host, nil
 }
 
-// DeleteHostByID removes a host from the database by its ID.
-func DeleteHostByID(db *sql.DB, id string) error { // Changed id to string
-	res, err := db.Exec("DELETE FROM hosts WHERE id = ?", id)
+// removes a host from the database by its hostname.
+func DeleteHostByHostname(db *sql.DB, hostname string) error {
+	res, err := db.Exec("DELETE FROM hosts WHERE hostname = ?", hostname)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func DeleteHostByID(db *sql.DB, id string) error { // Changed id to string
 
 // UpdateHost modifies an existing host in the database.
 func UpdateHost(db *sql.DB, host *Host) error {
-	res, err := db.Exec("UPDATE hosts SET hostname = ?, ip_address = ?, host_group = ? WHERE id = ?", host.Hostname, host.IPAddress, host.HostGroup, host.ID)
+	res, err := db.Exec("UPDATE hosts SET ip_address = ?, host_group = ? WHERE hostname = ?", host.IPAddress, host.HostGroup, host.Hostname)
 	if err != nil {
 		return err
 	}

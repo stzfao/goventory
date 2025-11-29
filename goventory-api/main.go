@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
-    // "strconv"
+	"sort"
+	"strings"
+	// "strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stzfao/goventory/goventory-api/internal/database"
@@ -43,11 +45,13 @@ func main() {
     // List existing servers
 	r.GET("/hosts", server.listHostsHandler)
 
-    r.GET("/hosts/:id", server.getHostHandler)
+    r.GET("/hosts/:hostname", server.getHostHandler)
 
-    r.DELETE("/hosts/:id", server.deleteHostHandler)
+    r.DELETE("/hosts/:hostname", server.deleteHostHandler)
 
-    r.PUT("/hosts/:id", server.updateHostHandler)
+    r.PUT("/hosts/:hostname", server.updateHostHandler)
+
+    r.GET("/inventory", server.getInventoryHandler)
 
 	r.Run(":8080") // listen and serve on 8080
 }
@@ -61,6 +65,12 @@ func (server *Server) createHostHandler(context *gin.Context) {
 	if err := context.ShouldBindJSON(&newHost); err != nil {
         log.Printf("Data not in expected format: %v", err)
 		context.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate that the hostname and host_group are not empty
+	if newHost.Hostname == "" || newHost.HostGroup == "" {
+		context.JSON(http.StatusBadRequest, gin.H{"error": "hostname and host_group are required fields"})
 		return
 	}
 
@@ -87,21 +97,16 @@ func (server *Server) listHostsHandler(context *gin.Context) {
 	context.JSON(http.StatusOK, hosts)
 }
 
-// Get a single host by its ID
+// Get a single host by its hostname
 func (server *Server) getHostHandler(context *gin.Context) {
-	id := context.Param("id")
-	// id, err := strconv.ParseInt(idStr, 10, 64)
-	// if err != nil {
-	// 	context.JSON(http.StatusBadRequest, gin.H{"error": "Invalid host ID"})
-	// 	return
-	// }
+	hostname := context.Param("hostname")
 
-	host, err := database.GetHostByID(server.db, id)
+	host, err := database.GetHostByHostname(server.db, hostname)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			context.JSON(http.StatusNotFound, gin.H{"error": "Host not found"})
 		} else {
-			log.Printf("Error getting host %d: %v", id, err)
+			log.Printf("Error getting host %s: %v", hostname, err)
 			context.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve host"})
 		}
 		return
@@ -110,21 +115,16 @@ func (server *Server) getHostHandler(context *gin.Context) {
 	context.JSON(http.StatusOK, host)
 }
 
-// Delete a host by its ID
+// Delete a host by its hostname
 func (server *Server) deleteHostHandler(context *gin.Context) {
-	id := context.Param("id")
-	// id, err := strconv.ParseInt(idStr, 10, 64)
-	// if err != nil {
-	// 	context.JSON(http.StatusBadRequest, gin.H{"error": "Invalid host ID"})
-	// 	return
-	// }
+	hostname := context.Param("hostname")
 
-	err := database.DeleteHostByID(server.db, id)
+	err := database.DeleteHostByHostname(server.db, hostname)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			context.JSON(http.StatusNotFound, gin.H{"error": "Host not found"})
 		} else {
-			log.Printf("Error deleting host %d: %v", id, err)
+			log.Printf("Error deleting host %s: %v", hostname, err)
 			context.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete host"})
 		}
 		return
@@ -133,22 +133,17 @@ func (server *Server) deleteHostHandler(context *gin.Context) {
 	context.Status(http.StatusNoContent)
 }
 
-// Update a host by its ID
+// Update a host by its hostname
 func (server *Server) updateHostHandler(context *gin.Context) {
-	id := context.Param("id")
-	// id, err := strconv.ParseInt(idStr, 10, 64)
-	// if err != nil {
-	// 	context.JSON(http.StatusBadRequest, gin.H{"error": "Invalid host ID"})
-	// 	return
-	// }
+	hostname := context.Param("hostname")
 
 	// fetch existing host data
-	existingHost, err := database.GetHostByID(server.db, id)
+	existingHost, err := database.GetHostByHostname(server.db, hostname)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			context.JSON(http.StatusNotFound, gin.H{"error": "Host not found"})
 		} else {
-			log.Printf("Error getting host %d: %v", id, err)
+			log.Printf("Error getting host %s: %v", hostname, err)
 			context.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve host"})
 		}
 		return
@@ -162,9 +157,6 @@ func (server *Server) updateHostHandler(context *gin.Context) {
 	}
 
 	// merge
-	if hostname, ok := updates["hostname"].(string); ok {
-		existingHost.Hostname = hostname
-	}
 	if ipAddress, ok := updates["ip_address"].(string); ok {
 		existingHost.IPAddress = ipAddress
 	}
@@ -175,15 +167,45 @@ func (server *Server) updateHostHandler(context *gin.Context) {
 	// Save the updated host data
 	err = database.UpdateHost(server.db, existingHost)
 	if err != nil {
-		// The update function already checks for ErrNoRows, but it's good practice to be robust.
-		if err == sql.ErrNoRows {
-			context.JSON(http.StatusNotFound, gin.H{"error": "Host not found"})
-		} else {
-			log.Printf("Error updating host %s: %v", id, err)
-			context.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update host"})
-		}
+		
+		log.Printf("Error updating host %s: %v", hostname, err)
+		context.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update host"})
 		return
 	}
 
 	context.JSON(http.StatusOK, existingHost)
+}
+
+// Get Ansible inventory
+func (server *Server) getInventoryHandler(context *gin.Context) {
+	hosts, err := database.ListHosts(server.db)
+	if err != nil {
+		log.Printf("Error listing hosts for inventory: %v", err)
+		context.String(http.StatusInternalServerError, "Error generating inventory")
+		return
+	}
+
+	// group hosts by host_group
+	groups := make(map[string][]string)
+	for _, host := range hosts {
+		groups[host.HostGroup] = append(groups[host.HostGroup], host.Hostname)
+	}
+
+	// get sorted list of group names
+	groupNames := make([]string, 0, len(groups))
+	for groupName := range groups {
+		groupNames = append(groupNames, groupName)
+	}
+	sort.Strings(groupNames)
+
+	var inventory strings.Builder
+	for _, group := range groupNames {
+		inventory.WriteString("[" + group + "]\n")
+		for _, host := range groups[group] {
+			inventory.WriteString(host + "\n")
+		}
+		inventory.WriteString("\n")
+	}
+
+	context.String(http.StatusOK, inventory.String())
 }

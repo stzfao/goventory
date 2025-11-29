@@ -1,11 +1,15 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -25,31 +29,99 @@ var (
 	}
 )
 
-func TestAccHostResource(t *testing.T) {
-	// Mock API server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.Method {
-		case http.MethodPost:
-			w.WriteHeader(http.StatusCreated)
-			w.Write([]byte(`{"id": "test-id", "hostname": "test-host", "ip_address": "1.1.1.1", "host_group": "test-group"}`))
-		case http.MethodGet:
-			if r.URL.Path == "/hosts/test-host-updated" {
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"id": "test-id", "hostname": "test-host-updated", "ip_address": "2.2.2.2", "host_group": "test-group-updated"}`))
-			} else {
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"id": "test-id", "hostname": "test-host", "ip_address": "1.1.1.1", "host_group": "test-group"}`))
-			}
-		case http.MethodPut:
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"id": "test-id", "hostname": "test-host-updated", "ip_address": "2.2.2.2", "host_group": "test-group-updated"}`))
-		case http.MethodDelete:
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			w.WriteHeader(http.StatusNotFound)
+// mockAPIServer is a stateful mock API server for testing.
+type mockAPIServer struct {
+	mu    sync.Mutex
+	hosts map[string]goventoryHost
+}
+
+func newMockAPIServer() *mockAPIServer {
+	return &mockAPIServer{
+		hosts: make(map[string]goventoryHost),
+	}
+}
+
+func (s *mockAPIServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+
+	if len(parts) < 3 || parts[0] != "api" || parts[1] != "v1" || parts[2] != "hosts" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	hostname := ""
+	if len(parts) > 3 {
+		hostname = parts[3]
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		var host goventoryHost
+		if err := json.NewDecoder(r.Body).Decode(&host); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
 		}
-	}))
+		host.ID = uuid.New().String()
+		s.hosts[host.Hostname] = host
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(host)
+
+	case http.MethodGet:
+		if hostname == "" {
+			var hosts []goventoryHost
+			for _, h := range s.hosts {
+				hosts = append(hosts, h)
+			}
+			json.NewEncoder(w).Encode(hosts)
+			return
+		}
+		host, ok := s.hosts[hostname]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		json.NewEncoder(w).Encode(host)
+
+	case http.MethodPut:
+		existingHost, ok := s.hosts[hostname]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var updates map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if ip, ok := updates["ip_address"]; ok {
+			existingHost.IPAddress = ip.(string)
+		}
+		if group, ok := updates["host_group"]; ok {
+			existingHost.HostGroup = group.(string)
+		}
+		s.hosts[hostname] = existingHost
+		json.NewEncoder(w).Encode(existingHost)
+
+	case http.MethodDelete:
+		if _, ok := s.hosts[hostname]; !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		delete(s.hosts, hostname)
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func TestAccHostResource(t *testing.T) {
+	server := httptest.NewServer(newMockAPIServer())
 	defer server.Close()
 
 	resource.Test(t, resource.TestCase{
@@ -75,13 +147,13 @@ func TestAccHostResource(t *testing.T) {
 			{
 				Config: fmt.Sprintf(providerConfig, server.URL) + `
 				  resource "goventory_host" "test" {
-					hostname   = "test-host-updated"
+					hostname   = "test-host"
 					ip_address = "2.2.2.2"
 					host_group = "test-group-updated"
 				  }
 				`,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("goventory_host.test", "hostname", "test-host-updated"),
+					resource.TestCheckResourceAttr("goventory_host.test", "hostname", "test-host"),
 					resource.TestCheckResourceAttr("goventory_host.test", "ip_address", "2.2.2.2"),
 					resource.TestCheckResourceAttr("goventory_host.test", "host_group", "test-group-updated"),
 				),
